@@ -1,226 +1,235 @@
+
+# Wisconsin Diagnostic Breast Cancer (WDBC)
+
+
+using DelimitedFiles
 using Statistics
 using Flux
 using Flux.Losses
-using DelimitedFiles
 
 
-function oneHotEncoding(feature,clases)
-    if length(clases) <= 2   #Si hay dos clases devualve un vector
-        y = reshape(feature .== clases[1],(length(feature),1))
-    else                        #Si hay mas de dos clases devuelve una matrix
-        y = zeros(length(feature),length(clases))
-        y = convert(BitArray{2},y)
-        for i in 1:length(clases)
-            y[:,i] = feature .== clases[i]
+# Lectura del dataset
+dataset = readdlm("P1\\wdbc.data",',');
+
+# Elimina el atributo "ID", puesto que no es relevante
+dataset = dataset[:, 2:32]
+
+inputs = Float32.(dataset[:, 2:31]) # Matriz de entradas
+targets = dataset[:, 1] # Matriz de salidas deseadas
+
+# En nuestro problema se dispone de una única variable
+# categórica, correspondiente a la salida deseada, que codificaremos
+# como 0 (benigno) y 1 (maligno), usando la técnica One-Hot Encoding
+
+function oneHotEncoding(feature::AbstractArray{<:Any, 1}, classes::AbstractArray{<:Any, 1})
+    # Únicamente 2 categorías
+    if length(classes) == 2
+        # Crea el vector de booleanos
+        oneHot = (feature .== classes[1]);
+        # Transforma el vector a una matriz bidimensional de una columna
+        oneHot = reshape(oneHot, (length(oneHot), 1));
+
+    elseif length(classes) > 2 # Más de 2 categorías
+        # Crea la matriz de booleanos
+        oneHot = zeros(Bool, size(feature, 1), length(classes));
+        for i in 1:length(classes) # Recorre las clases
+            oneHot[:, i] = (feature .== classes[i]);
         end
     end
-    return y
+
+    return oneHot;
 end
 
-function oneHotEncoding(feature::AbstractArray{<:Any,1})
-    clases = unique(feature)
-    oneHotEncoding(feature, clases)
+# Caso en el que no se pase el atributo "classes"
+oneHotEncoding(feature::AbstractArray{<:Any, 1}) = oneHotEncoding(feature::AbstractArray{<:Any, 1}, unique(feature));
+
+# Caso en el que se pase directamente un vector de booleanos
+oneHotEncoding(feature::AbstractArray{Bool, 1}) = reshape(feature, (length(feature), 1));
+
+
+# Calcula los parámetros de la normalización max-min
+function calculateMinMaxNormalizationParameters(dataset::AbstractArray{<:Real, 2}, dataInRows = true)
+    ( minimum(dataset, dims=(dataInRows ? 1 : 2)), maximum(dataset, dims=(dataInRows ? 1 : 2)) );
 end
 
-function oneHotEncoding(feature::AbstractArray{Bool,1})
-    clases = unique(feature)
-    y = reshape(feature .== clases[1],(length(feature),1))
-    return y
+calculateMinMaxNormalizationParameters(inputs)
+
+# Calcula los parámetros de la normalización de media 0
+function calculateZeroMeanNormalizationParameters(dataset::AbstractArray{<:Real, 2}, dataInRows = true)
+    ( mean(dataset, dims=(dataInRows ? 1 : 2)), std(dataset, dims=(dataInRows ? 1 : 2)) );
 end
 
+calculateZeroMeanNormalizationParameters(inputs)
 
 
-
-function calculateMinMaxNormalizationParameters(x::AbstractArray{<:Real,2})
-    maximos = maximum(inputs,dims=1)
-    minimos = minimum(inputs,dims=1)
-    return (maximos,minimos)
-end
-
-function calculateZeroMeanNormalizationParameters(x::AbstractArray{<:Real,2})
-    medias = mean(inputs,dims=1)
-    desviaciones = std(inputs,dims=1)
-    return (medias,desviaciones)
-end
-
-
-
-function normalizeMinMax!(matriz::AbstractArray{<:Real,2},
-                            parametros::NTuple{2, AbstractArray{<:Real,2}})
-
-    for i in 1:size(matriz,2)
-        matriz[:,i] = (matriz[:,i] .- parametros[2][i]) ./ (parametros[1][i].-parametros[2][i])
+# Normaliza el "dataset" con min-max
+function normalizeMinMax!(dataset::AbstractArray{<:Real, 2}, normalizationParameters::NTuple{2, AbstractArray{<:Real, 2}})
+    for i in 1:size(dataset, 2)
+        dataset[:, i] = (dataset[:, i] .- normalizationParameters[1][i]) ./ (normalizationParameters[2][i].-normalizationParameters[1][i]);
     end
-    return matriz
+
+    return dataset;
 end
 
-function normalizeMinMax!(matriz::AbstractArray{<:Real,2})
+normalizeMinMax!(dataset::AbstractArray{<:Real, 2}) = normalizeMinMax!(dataset, calculateMinMaxNormalizationParameters(dataset));
 
-    parametros = calculateMinMaxNormalizationParameters(matriz)
+function normalizeMinMax(dataset::AbstractArray{<:Real, 2}, normalizationParameters::NTuple{2, AbstractArray{<:Real, 2}})
+    datasetCopy = copy(dataset);
+    normalizeMinMax!(datasetCopy);
 
-    normalizeMinMax!(matriz,parametros)
+    return datasetCopy;
 end
 
-function normalizeMinMax(matriz::AbstractArray{<:Real,2},
-                            parametros::NTuple{2, AbstractArray{<:Real,2}})
+normalizeMinMax(dataset::AbstractArray{<:Real, 2}) = normalizeMinMax(dataset, calculateMinMaxNormalizationParameters(dataset));
 
-    matriz1 = copy(matriz)
 
-    for i in 1:size(matriz1,2)
-        matriz1[:,i] = (matriz1[:,i] .- parametros[2][i]) ./ (parametros[1][i].-parametros[2][i])
+# Normaliza el "dataset" con mean-std
+function normalizeZeroMean!(dataset::AbstractArray{<:Real, 2}, normalizationParameters::NTuple{2, AbstractArray{<:Real, 2}})
+    for i in 1:size(dataset, 2)
+        dataset[:,i] = (dataset[:,i] .- normalizationParameters[1][i]) ./ normalizationParameters[2][i]
     end
-    return matriz1
+
+    return dataset;
 end
 
-function normalizeMinMax(matriz::AbstractArray{<:Real,2})
+normalizeZeroMean!(dataset::AbstractArray{<:Real, 2}) = normalizeZeroMean!(dataset, calculateZeroMeanNormalizationParameters(dataset));
 
-    parametros = calculateMinMaxNormalizationParameters(matriz1)
+function normalizeZeroMean(dataset::AbstractArray{<:Real, 2}, normalizationParameters::NTuple{2, AbstractArray{<:Real, 2}})
+    datasetCopy = copy(dataset);
+    normalizeZeroMean!(datasetCopy);
 
-    normalizeMinMax(matriz,parametros)
+    return datasetCopy
 end
 
-
-function normalizeZeroMean!(matriz::AbstractArray{<:Real,2},
-                            parametros::NTuple{2, AbstractArray{<:Real,2}})
-
-    for i in 1:size(matriz,2)
-        matriz[:,i] = (matriz[:,i] .- parametros[1][i]) ./ parametros[2][i]
-    end
-    return matriz
-end
-
-function normalizeZeroMean!(matriz::AbstractArray{<:Real,2})
-
-    parametros = calculateZeroMeanNormalizationParameters(matriz)
-
-    normalizeZeroMean!(matriz,parametros)
-end
-
-function normalizeZeroMean(matriz::AbstractArray{<:Real,2},
-                            parametros::NTuple{2, AbstractArray{<:Real,2}})
-
-    matriz1 = copy(matriz)
-
-    for i in 1:size(matriz1,2)
-        matriz1[:,i] = (matriz1[:,i] .- parametros[1][i]) ./ parametros[2][i]
-    end
-    return matriz1
-end
-
-function normalizeZeroMean(matriz::AbstractArray{<:Real,2})
-
-    parametros = calculateZeroMeanNormalizationParameters(matriz)
-
-    normalizeZeroMean(matriz,parametros)
-end
+normalizeZeroMean(dataset::AbstractArray{<:Real, 2}) = normalizeZeroMean(dataset, calculateZeroMeanNormalizationParameters(dataset));
 
 
-function classifyOutputs(outputs::AbstractArray{<:Real,2},umbral=0.5)
-    if size(outputs,2) == 1
-        outputs = outputs .>= umbral
-
+# Clasifica las salidas de la RNA
+function classifyOutputs(outputs::AbstractArray{<:Real,2}, umbral = 0.5)
+    if size(outputs, 2) == 1
+        outputs = (outputs .>= umbral);
     else
-        (_,indicesMaxEachInstance) = findmax(outputs, dims=2);
+        (_, indicesMaxEachInstance) = findmax(outputs, dims=2);
         outputs = falses(size(outputs));
         outputs[indicesMaxEachInstance] .= true;
     end
+
     return outputs
 end
 
-function accuracy(targets::AbstractArray{Bool,1},outputs::AbstractArray{Bool,1})
-    classComparison = targets .== outputs
-    correctClassifications = all(classComparison, dims=2)
-    prec = mean(correctClassifications)
-    return prec
+
+# Calcula la precisión de un problema con únicamente 2 clases
+function accuracy(targets::AbstractArray{Bool,1}, outputs::AbstractArray{Bool,1})
+    classComparison = targets .== outputs;
+    accuracy = mean(classComparison);
+
+    return accuracy # Precisión con únicamente 2 clases
 end
 
-function accuracy(targets::AbstractArray{Bool,2},outputs::AbstractArray{Bool,2})
-    if typeof(targets) .== typeof(outputs) == BitArray{1}
-        accuracy(targets,outputs)
+function accuracy(targets::AbstractArray{Bool,2}, outputs::AbstractArray{Bool,2})
+    if size(targets, 2) == 1 # Llamada a la función anterior
+        accuracy(targets[:, 1], outputs[:, 1]);
+    elseif size(targets, 2) > 2 # Número de columnas mayor que 2 (más de 2 clases)
+        classComparison = targets .== outputs;
+        correctClassifications = all(classComparison, dims = 2);
+        accuracy = mean(correctClassifications);
+    end
 
-    else
-        classComparison = targets .== outputs
-        correctClassifications = all(classComparison, dims=2)
-        prec = mean(correctClassifications)
-        return prec
+    return accuracy
+end
+
+# Caso en que "outputs" no tenga valores de pertenencia a 2 clases
+function accuracy(targets::AbstractArray{Bool,1}, outputs::AbstractArray{<:Real,1}, umbral = 0.5)
+    outputs = outputs .>= umbral; # Le pasa el umbral
+    accuracy(targets, outputs);
+end
+
+# Caso en que "outputs" no tenga valores de pertenencia a N clases
+function accuracy(targets::AbstractArray{Bool,2}, outputs::AbstractArray{<:Real,2})
+    if size(targets, 2) == 1 # Una única columna
+        accuracy(targets[:, 1], outputs[:, 1]);
+    elseif size(targets, 2) > 2 # Más de 2 columnas
+        outputs = classifyOutputs(outputs);
+        accuracy(targets, outputs);
     end
 end
 
-function accuracy(targets::AbstractArray{Bool,1},outputs::AbstractArray{<:Real,1}, umbral=0.5)
-    outputs = classifyOutputs(outputs,umbral)
-    accuracy(targets,outputs)
-end
 
-function accuracy(targets::AbstractArray{Bool,2},outputs::AbstractArray{<:Real,2})
-    if typeof(targets) .== typeof(outputs) == BitArray{1}
-        accuracy(targets,outputs)
-
-    else
-        outputs = classifyOutputs(outputs)
-        accuracy(targets,outputs)
-    end
-end
-
-function rrnnaa(topology::AbstractArray{<:Int,1},numInput,numOutput)
-    ann = Chain();
-    numInputsLayer = numInput;
-    for numOutputsLayer = topology
+# Crea una RR.NN.AA con la topología especificada
+function buildClassANN(topology::AbstractArray{<:Int, 1}, numInputs::Int64, numOutputs::Int64)
+    ann = Chain(); # Crea una RNA vacía
+    numInputsLayer = numInputs;
+    for numOutputsLayer = topology # Añade cada capa a la red
         ann = Chain(ann..., Dense(numInputsLayer, numOutputsLayer, σ) );
         numInputsLayer = numOutputsLayer;
-    end;
-
-    if numOutput == 1
-        ann = Chain(ann..., Dense(numInputsLayer, numOutput ,σ))
-    else
-        ann = Chain(ann..., Dense(numInputsLayer, numOutput ,identity))
-        ann = Chain(ann..., softmax)
     end
 
-    return ann
+    # Capa de salida en función del número de clases
+    if numOutputs == 1 # Una única neurona de salida (2 clases)
+        # Función de transferencia sigmoidal
+        ann = Chain(ann..., Dense(numInputsLayer, numOutputs, σ));
+    else # Añade función softmax
+        ann = Chain(ann..., Dense(numInputsLayer, numOutputs, identity));
+        ann = Chain(ann..., softmax);
+    end
+
+    return ann # Devuelve la red creada
 end
 
-function clasificacion(topology::AbstractArray{<:Int,1},
-            dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{Bool,2}},
-            maxEpochs::Int=1000, minLoss::Real =0.3, learningRate::Real = 0.01)
+#################################
+# HASTA ESTE PUNTO ESTA REVISADO
+#################################
 
-    ann = rrnnaa(topology,size(dataset[1],2),size(dataset[2],2))
+function trainClassANN(topology::AbstractArray{<:Int,1},
+                       dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{Bool,2}};
+                       maxEpochs::Int = 1000, minLoss::Real = 0, learningRate::Real = 0.01)
 
+    # Crea la RNA (pesos inicializados aleatoriamente)
+    ann = buildClassANN(topology, size(dataset[1], 2), size(dataset[2], 2));
+
+    # Define la función de "loss"
     loss(x,y) = (size(y,1) == 1) ? Losses.binarycrossentropy(ann(x),y) : Losses.crossentropy(ann(x),y);
 
-    loses= []
+    # Vector con los valores de "loss" en cada ciclo de entrenamiento
+    losses = [];
 
-    for i in 1:maxEpochs
+    # Valor de "loss" sobre la red sin entrenar
+    error = loss(dataset[1]', dataset[2]');
+
+    # Entrena la red hasta que alcance un error de entrenamiento aceptable
+    while error > minLoss
         Flux.train!(loss, params(ann), [(dataset[1]', dataset[2]')], ADAM(learningRate));
-        error = loss(dataset[1]',dataset[2]')
-        append!(loses,error)
+        error = loss(dataset[1]', dataset[2]'); # Valor de "loss" tras el ciclo
+        append!(losses, error);
     end
-    return (ann,loses)
+
+    return ann, losses
+end
+
+function trainClassANN(topology::AbstractArray{<:Int,1},
+                       dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{Bool,1}};
+                       maxEpochs::Int = 1000, minLoss::Real = 0, learningRate::Real = 0.01)
+
+    # Convierte el vector de salidas deseadas a una matriz con una columna
+    dataset[2] = reshape(dataset[2], length(dataset[2]), 1);
+
+    # Llamada a la función anterior
+    trainClassANN(topology, dataset, maxEpochs, minLoss, learningRate);
 end
 
 
-function clasificacion(topology::AbstractArray{<:Int,1},
-            dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{Bool,1}},
-            maxEpochs::Int=1000, minLoss::Real =0.15, learningRate::Real = 0.01)
+# Puesto que los valores son el resultado de mediciones,
+# optaremos por hacer uso de la normalización de media 0
 
-    dataset[2] = reshape(dataset[2],(length(dataset[2]),1))
+# Entradas normalizadas por media 0
+inputsNorm = normalizeZeroMean(inputs)
 
-    clasificacion(topology,dataset,maxEpochs,minLoss,learningRate)
-
-end
-
-
-#Cargar los datos
-datos = readdlm("/home/juan/uni/aa1/pra/wdbc.data",',');
-inputs = datos[:,3:32];
-targets = datos[:,2];
-
-#Transformas las variables categoricas a boleanos
+# Salidas deseadas codificadas
 targets = oneHotEncoding(targets)
-inputs = Float32.(inputs)
-inputs = normalizeZeroMean(inputs)
-dataset = (inputs,targets)
 
-topology = [6,3]
-ann,error = clasificacion(topology,dataset)
-outputs = classifyOutputs(ann(inputs')')
-accuracy(targets,outputs)
+
+topology = [1]
+ann, losses = trainClassANN(topology, (inputsNorm, targets), minLoss = 0.15)
+
+outputs = ann(inputsNorm')
+accuracy(targets, outputs')
